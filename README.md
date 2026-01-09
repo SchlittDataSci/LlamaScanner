@@ -2,13 +2,13 @@
 
 A Python command-line utility to automatically discover distributed Ollama instances across a **Tailscale** network, inventory their available models, and benchmark their inference speed.
 
-The tool generates clean routing table identifying the fastest host for each model in your private cloud to facilitate the distribution and load balancing of local AI models.
+The tool generates a clean routing table identifying the fastest host for each model in your private cloud to facilitate the distribution and load balancing of local AI models.
 
 ## Why LlamaScanner?
 
-While many tools exist for load balancing or benchmarking LLMs, most require manual configuration or heavy infrastructure. This utility fills a specific gap for home labs and private clouds:
+While many tools exist for load balancing or benchmarking LLMs, most require manual configuration or assume heavy infrastructure. This utility fills a specific gap for home labs:
 
-1.  **Zero-Config Discovery:** Unlike standard proxies (`ollama_proxy_server`, Nginx) that require a static `config.json` with manually typed IPs, this tool uses the **Tailscale API** to find your machines automatically. If you add a new laptop to your network, this script finds it instantly without code changes.
+1.  **Dynamic Discovery for Static Proxies:** While robust proxies like `ollama_proxy_server` or Nginx typically rely on static configuration files, LlamaScanner bridges the gap by using the **Tailscale API** to automatically discover new nodes. It can generate the necessary configuration for these proxies, allowing them to adapt instantly when you add a new laptop or GPU server to your network without manual editing.
 2.  **Model-Aware Routing:** It doesn't just check if a host is "up"; it inventories *which* models are pulled on which machine, enabling rapid experimentation without manually updating config files.
 3.  **Real-World Benchmarks:** Instead of relying on theoretical specs, **LlamaScanner** runs live inference tests under your specific network conditions, accounting for Wi-Fi latency and thermal throttling of the host machine.
 
@@ -16,6 +16,7 @@ While many tools exist for load balancing or benchmarking LLMs, most require man
 
 - **Auto-Discovery:** Scans the local Tailscale network map to find active peers (100.x.x.x) without brute-force scanning.
 - **Inventory Mapping:** Connects to every active node to retrieve the list of pulled models (`/api/tags`).
+- **Proxy Configuration:** Generates a `targets.json` file compatible with `ollama_proxy_server` for instant load balancer updates.
 - **Robust Benchmarking:**
   - Sequential testing per host to prevent VRAM thrashing.
   - "Warm-up" requests to ensure models are loaded into memory before measuring.
@@ -50,6 +51,7 @@ python LlamaScanner.py
 | Argument | Default | Description |
 | :--- | :--- | :--- |
 | `-o`, `--output` | None | Path to save the routing table as a CSV file (e.g., `routes.csv`). |
+| `--proxy` | None | Path to save a JSON config for `ollama_proxy_server` (e.g., `targets.json`). |
 | `--runs` | 3 | Number of benchmark inference passes to average per model. |
 | `--cooldown` | 5 | Seconds to wait between models on the same host (clears VRAM). |
 | `--workers` | 10 | Max number of hosts to benchmark concurrently. |
@@ -63,9 +65,26 @@ python LlamaScanner.py
 python LlamaScanner.py --output my_routes.csv
 ```
 
+**Generate a proxy config (Skipping benchmarks for speed):**
+```bash
+python LlamaScanner.py --proxy targets.json
+```
+
 **Run a more rigorous benchmark (5 runs per model):**
 ```bash
 python LlamaScanner.py --runs 5 --cooldown 10
+```
+
+## Automation with ollama_proxy_server
+
+You can use **LlamaScanner** as a dynamic "Control Plane" for your load balancer. Set up a cron job to run the script periodically; this ensures your proxy always knows about new nodes or new models.
+
+```bash
+# 1. Discover nodes & generate config (Fast - skips benchmarks)
+python LlamaScanner.py --proxy targets.json
+
+# 2. Restart your proxy to apply changes (Example command)
+# systemctl restart ollama-proxy
 ```
 
 ## Example Output
@@ -92,7 +111,8 @@ python LlamaScanner.py --runs 5 --cooldown 10
 1. **Discovery:** The script runs `tailscale status --json` to get a list of known peers. It filters for IPv4 addresses in the `100.x` range and verifies port `11434` connectivity via TCP.
 2. **Inventory:** It queries `/api/tags` on every active host concurrently to build a map of `{IP: [Model List]}`.
 3. **Benchmarking:**
+   - *Note: This step is skipped if only `--proxy` is used.*
    - It iterates through the inventory. Hosts are processed in parallel, but models *within* a host are processed sequentially.
-   - It sends a standard prompt ("Write me a pythong function to identify primes that rhyme.") with `num_predict=100` and `seed=1337`.
+   - It sends a standard prompt ("Write me a python function to identify primes that rhyme.") with `num_predict=100` and `seed=1337`.
    - It calculates the exact **Tokens Per Second** using Ollama's internal `eval_duration` metric (pure compute time).
 4. **Reporting:** Results are aggregated into a routing table, sorted by model and speed.
