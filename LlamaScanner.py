@@ -12,12 +12,12 @@ import pandas as pd
 
 from collections import defaultdict
 
-
-# Default arguments
+# Defaults
 DEFAULT_LOAD_TIMEOUT = 300
 DEFAULT_BENCH_TIMEOUT = 60
 DEFAULT_COOLDOWN = 5
 DEFAULT_RUNS = 3
+
 
 def get_args():
     parser = argparse.ArgumentParser(
@@ -26,6 +26,7 @@ def get_args():
     )
     
     parser.add_argument("-o", "--output", help="Path to save the routing table (CSV)")
+    parser.add_argument("-p", "--proxy", help="Path to save a JSON config for ollama_proxy_server")
     parser.add_argument("--runs", type=int, default=DEFAULT_RUNS, help="Number of benchmark runs per model")
     parser.add_argument("--cooldown", type=int, default=DEFAULT_COOLDOWN, help="Seconds to wait between models")
     parser.add_argument("--timeout-load", type=int, default=DEFAULT_LOAD_TIMEOUT, help="Seconds to wait for model load")
@@ -71,7 +72,7 @@ def checkOllamaPort(ip, port=11434, timeout=1.0):
     return None
 
 
-    
+
 def findActiveHosts():
     """Scans Tailscale IPs for active Ollama instances."""
     print("[-] Scanning Tailscale network for active nodes...")
@@ -89,7 +90,7 @@ def findActiveHosts():
     return activeHosts
 
 
-
+    
 def getModelsOnHost(ip, port=11434):
     """Gets list of models from a host."""
     try:
@@ -120,12 +121,11 @@ def benchmarkSingleModel(ip, model, args, port=11434):
     url = f"http://{ip}:{port}/api/generate"
     payload = {
         "model": model, 
-        "prompt": "Write me a python method that identifies primes that rhyme.", 
+        "prompt": "Write a paragraph about the history of the internet.", 
         "stream": False, 
-        "options": {"num_predict": 100, "temperature": 0.0, "seed": 1337}
+        "options": {"num_predict": 100, "temperature": 0.0, "seed": 42}
     }
     
-    # Warm-up
     try:
         requests.post(url, json=payload, timeout=args.timeout_load)
     except:
@@ -149,7 +149,7 @@ def benchmarkSingleModel(ip, model, args, port=11434):
     return round(statistics.mean(samples), 2)
 
 
-    
+
 def processHostBenchmarks(ip, models, args):
     """Benchmarks models sequentially on a single host."""
     results = {}
@@ -157,13 +157,11 @@ def processHostBenchmarks(ip, models, args):
     for model in models:
         tps = benchmarkSingleModel(ip, model, args)
         results[model] = tps
-        
-        status = f"{tps} t/s" if isinstance(tps, float) else str(tps)
         time.sleep(args.cooldown)
     return ip, results
 
 
-
+    
 def runRobustBenchmarks(inventory, args):
     """Orchestrates distributed benchmarks."""
     print("[-] Starting Distributed Benchmarks...")
@@ -199,9 +197,23 @@ def generateRoutingDataFrame(stats):
     return df
 
 
+
+def generateProxyJson(inventory):
+    """Generates configuration JSON for proxy servers from Inventory."""
+    targets = []
+    for ip, models in inventory.items():
+        if models:
+            targets.append({
+                "url": f"http://{ip}:11434",
+                "models": models
+            })
+    return json.dumps({"targets": targets}, indent=2)
+
+
     
-def scanOllamaModels():
+def main():
     args = get_args()
+    results = dict()
     
     # 1. Discovery
     hosts = findActiveHosts()
@@ -215,27 +227,43 @@ def scanOllamaModels():
         print("[!] Hosts found, but no models detected.")
         sys.exit(1)
 
-    # 3. Benchmark
-    stats = runRobustBenchmarks(inventory, args)
-    
-    # 4. Report
-    print("\n--- Routing Table ---")
-    df = generateRoutingDataFrame(stats)
-    
-    if df.empty:
-        print("[!] Benchmarks completed but no successful results found.")
-    else:
-        print(df.to_string(index=False))
+    # 3. Proxy Generation (Fast Path)
+    if args.proxy:
+        proxyConfig = generateProxyJson(inventory)
+        with open(args.proxy, "w") as f:
+            f.write(proxyConfig)
+        print(f"[+] Saved proxy config to: {args.proxy}")
+        results['proxy'] = proxyConfig
+
+    # 4. Benchmarking Logic
+    # We skip benchmarks if the user ONLY asked for a proxy file and didn't ask for a CSV report
+    # If the user supplied NO arguments, they probably want the console table, so we default to True.
+    should_benchmark = args.output or (not args.output and not args.proxy)
+
+    if should_benchmark:
+        stats = runRobustBenchmarks(inventory, args)
         
-        if args.output:
-            df.to_csv(args.output, index=False)
-            print(f"\n[+] Saved routing table to: {args.output}")
+        print("\n--- Routing Table ---")
+        df = generateRoutingDataFrame(stats)
+        
+        if df.empty:
+            print("[!] Benchmarks completed but no successful results found.")
+        else:
+            print(df.to_string(index=False))
+            
+            if args.output:
+                df.to_csv(args.output, index=False)
+                results['routing'] = df
+                print(f"\n[+] Saved routing table to: {args.output}")
+    else:
+        print("[-] Skipping benchmarks (Proxy-only mode).")
+    return results
 
 
 
 if __name__ == "__main__":
     try:
-        scanOllamaModels()
+        main()
     except KeyboardInterrupt:
         print("\n[!] Aborted by user.")
         sys.exit(0)
