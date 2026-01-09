@@ -42,7 +42,7 @@ pip install requests pandas
 Run the script from the command line periodically following changes to local LLM installs or hardware configurations. By default it will print the routing table to the console.
 
 ```bash
-python ollama_benchmark.py
+python LlamaScanner.py
 ```
 
 ### Command Line Arguments
@@ -60,12 +60,12 @@ python ollama_benchmark.py
 
 **Save the routing table to a file:**
 ```bash
-python ollama_benchmark.py --output my_routes.csv
+python LlamaScanner.py --output my_routes.csv
 ```
 
 **Run a more rigorous benchmark (5 runs per model):**
 ```bash
-python ollama_benchmark.py --runs 5 --cooldown 10
+python LlamaScanner.py --runs 5 --cooldown 10
 ```
 
 ## Example Output
